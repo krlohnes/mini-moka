@@ -6,6 +6,7 @@ pub struct Policy {
     max_capacity: Option<u64>,
     time_to_live: Option<Duration>,
     time_to_idle: Option<Duration>,
+    time_to_exist: Option<Duration>,
 }
 
 impl Policy {
@@ -13,11 +14,13 @@ impl Policy {
         max_capacity: Option<u64>,
         time_to_live: Option<Duration>,
         time_to_idle: Option<Duration>,
+        time_to_exist: Option<Duration>,
     ) -> Self {
         Self {
             max_capacity,
             time_to_live,
             time_to_idle,
+            time_to_exist,
         }
     }
 
@@ -34,5 +37,10 @@ impl Policy {
     /// Returns the `time_to_idle` of the cache.
     pub fn time_to_idle(&self) -> Option<Duration> {
         self.time_to_idle
+    }
+
+    /// Returns the `time_to_exist` of the cache.
+    pub fn time_to_exist(&self) -> Option<Duration> {
+        self.time_to_exist
     }
 }

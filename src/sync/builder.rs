@@ -48,6 +48,7 @@ pub struct CacheBuilder<K, V, C> {
     weigher: Option<Weigher<K, V>>,
     time_to_live: Option<Duration>,
     time_to_idle: Option<Duration>,
+    time_to_exist: Option<Duration>,
     cache_type: PhantomData<C>,
     eviction_handler: Option<Box<dyn EvictionHandler<K, V>>>,
 }
@@ -64,6 +65,7 @@ where
             weigher: None,
             time_to_live: None,
             time_to_idle: None,
+            time_to_exist: None,
             cache_type: Default::default(),
             eviction_handler: None,
         }
@@ -96,7 +98,11 @@ where
     /// expiration.
     pub fn build(self) -> Cache<K, V, RandomState> {
         let build_hasher = RandomState::default();
-        builder_utils::ensure_expirations_or_panic(self.time_to_live, self.time_to_idle);
+        builder_utils::ensure_expirations_or_panic(
+            self.time_to_live,
+            self.time_to_idle,
+            self.time_to_exist,
+        );
         let eviction_handler = self
             .eviction_handler
             .unwrap_or_else(|| Box::new(DefaultEvictionHandler::new()));
@@ -107,6 +113,7 @@ where
             self.weigher,
             self.time_to_live,
             self.time_to_idle,
+            self.time_to_exist,
             eviction_handler,
         )
     }
@@ -125,7 +132,11 @@ where
     where
         S: BuildHasher + Clone + Send + Sync + 'static,
     {
-        builder_utils::ensure_expirations_or_panic(self.time_to_live, self.time_to_idle);
+        builder_utils::ensure_expirations_or_panic(
+            self.time_to_live,
+            self.time_to_idle,
+            self.time_to_exist,
+        );
         let eviction_handler = self
             .eviction_handler
             .unwrap_or_else(|| Box::new(DefaultEvictionHandler::new()));
@@ -136,6 +147,7 @@ where
             self.weigher,
             self.time_to_live,
             self.time_to_idle,
+            self.time_to_exist,
             eviction_handler,
         )
     }
@@ -186,6 +198,23 @@ where
     pub fn time_to_live(self, duration: Duration) -> Self {
         Self {
             time_to_live: Some(duration),
+            ..self
+        }
+    }
+
+    /// Sets the time to exist of the cache.
+    ///
+    /// A cached entry will be expired after the specified duration past from
+    /// `insert`.
+    ///
+    /// # Panics
+    ///
+    /// `CacheBuilder::build*` methods will panic if the given `duration` is longer
+    /// than 1000 years. This is done to protect against overflow when computing key
+    /// expiration.
+    pub fn time_to_exist(self, duration: Duration) -> Self {
+        Self {
+            time_to_exist: Some(duration),
             ..self
         }
     }
@@ -268,6 +297,17 @@ mod tests {
         let duration = Duration::from_secs(thousand_years_secs);
         builder
             .time_to_idle(duration + Duration::from_secs(1))
+            .build();
+    }
+
+    #[test]
+    #[should_panic(expected = "time_to_exist is longer than 1000 years")]
+    fn build_cache_too_long_tte() {
+        let thousand_years_secs: u64 = 1000 * 365 * 24 * 3600;
+        let builder: CacheBuilder<char, String, _> = CacheBuilder::new(100);
+        let duration = Duration::from_secs(thousand_years_secs);
+        builder
+            .time_to_exist(duration + Duration::from_secs(1))
             .build();
     }
 }

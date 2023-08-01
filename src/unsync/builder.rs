@@ -45,6 +45,7 @@ pub struct CacheBuilder<K, V, C> {
     weigher: Option<Weigher<K, V>>,
     time_to_live: Option<Duration>,
     time_to_idle: Option<Duration>,
+    time_to_exist: Option<Duration>,
     cache_type: PhantomData<C>,
 }
 
@@ -59,6 +60,7 @@ where
             weigher: None,
             time_to_live: None,
             time_to_idle: None,
+            time_to_exist: None,
             cache_type: Default::default(),
         }
     }
@@ -86,7 +88,11 @@ where
     /// expiration.
     pub fn build(self) -> Cache<K, V, RandomState> {
         let build_hasher = RandomState::default();
-        builder_utils::ensure_expirations_or_panic(self.time_to_live, self.time_to_idle);
+        builder_utils::ensure_expirations_or_panic(
+            self.time_to_live,
+            self.time_to_idle,
+            self.time_to_exist,
+        );
         Cache::with_everything(
             self.max_capacity,
             self.initial_capacity,
@@ -94,6 +100,7 @@ where
             self.weigher,
             self.time_to_live,
             self.time_to_idle,
+            self.time_to_exist,
         )
     }
 
@@ -108,7 +115,11 @@ where
     where
         S: BuildHasher + Clone,
     {
-        builder_utils::ensure_expirations_or_panic(self.time_to_live, self.time_to_idle);
+        builder_utils::ensure_expirations_or_panic(
+            self.time_to_live,
+            self.time_to_idle,
+            self.time_to_exist,
+        );
         Cache::with_everything(
             self.max_capacity,
             self.initial_capacity,
@@ -116,6 +127,7 @@ where
             self.weigher,
             self.time_to_live,
             self.time_to_idle,
+            self.time_to_exist,
         )
     }
 }

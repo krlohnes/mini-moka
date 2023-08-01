@@ -300,6 +300,7 @@ where
             None,
             None,
             None,
+            None,
             Box::new(DefaultEvictionHandler::new()),
         )
     }
@@ -385,6 +386,7 @@ where
         weigher: Option<Weigher<K, V>>,
         time_to_live: Option<Duration>,
         time_to_idle: Option<Duration>,
+        time_to_exist: Option<Duration>,
         eviction_handler: Box<dyn EvictionHandler<K, V>>,
     ) -> Self {
         Self {
@@ -395,6 +397,7 @@ where
                 weigher,
                 time_to_live,
                 time_to_idle,
+                time_to_exist,
                 eviction_handler,
             ),
         }
@@ -463,6 +466,7 @@ where
         let key = Arc::new(key);
         let (op, now) = self.base.do_upsert_with_hash(key, hash, value, update);
         let hk = self.base.housekeeper.as_ref();
+
         Self::schedule_write_op(
             self.base.inner.as_ref(),
             &self.base.write_op_ch,
@@ -914,6 +918,61 @@ mod tests {
     }
 
     #[test]
+    fn time_to_exist() {
+        let mut cache = Cache::builder()
+            .max_capacity(100)
+            .time_to_exist(Duration::from_secs(10))
+            .build();
+
+        cache.reconfigure_for_testing();
+
+        let (clock, mock) = Clock::mock();
+        cache.set_expiration_clock(Some(clock));
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        cache.insert("a", "alice");
+        cache.sync();
+
+        mock.increment(Duration::from_secs(5)); // 5 secs from the start.
+        cache.sync();
+
+        assert_eq!(cache.get(&"a"), Some("alice"));
+        assert!(cache.contains_key(&"a"));
+
+        mock.increment(Duration::from_secs(5)); // 10 secs.
+        assert_eq!(cache.get(&"a"), None);
+        assert!(!cache.contains_key(&"a"));
+
+        assert_eq!(cache.iter().count(), 0);
+
+        cache.sync();
+        assert!(cache.is_table_empty());
+
+        cache.insert("b", "bob");
+        cache.sync();
+
+        assert_eq!(cache.entry_count(), 1);
+
+        mock.increment(Duration::from_secs(5)); // 15 secs.
+        cache.sync();
+
+        assert_eq!(cache.get(&"b"), Some("bob"));
+        assert!(cache.contains_key(&"b"));
+        assert_eq!(cache.entry_count(), 1);
+
+        cache.insert("b", "bill");
+        cache.sync();
+
+        mock.increment(Duration::from_secs(5)); // 20 secs
+        cache.sync();
+
+        assert!(!cache.contains_key(&"b"));
+        assert!(cache.is_table_empty());
+    }
+
+    #[test]
     fn time_to_live() {
         let mut cache = Cache::builder()
             .max_capacity(100)
@@ -1262,6 +1321,26 @@ mod tests {
         cache.set_expiration_clock(Some(clock));
         cache.insert("Foo".to_owned(), "Bar".to_owned());
         mock.increment(Duration::from_millis(250));
+        cache.sync();
+        let keys = removed_keys.lock().unwrap();
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0], "Foo");
+    }
+
+    #[test]
+    fn test_eviction_handler_on_tte() {
+        let removed_keys = Arc::new(Mutex::new(Vec::new()));
+        let handler = TestEvictionHandler::new(removed_keys.clone());
+        let cache = Cache::builder()
+            .time_to_exist(Duration::from_millis(500))
+            .eviction_handler(handler)
+            .build();
+        let (clock, mock) = Clock::mock();
+        cache.set_expiration_clock(Some(clock));
+        cache.insert("Foo".to_owned(), "Bar".to_owned());
+        mock.increment(Duration::from_millis(250));
+        cache.insert("Foo".to_owned(), "Bar".to_owned());
+        mock.increment(Duration::from_millis(251));
         cache.sync();
         let keys = removed_keys.lock().unwrap();
         assert_eq!(keys.len(), 1);

@@ -95,6 +95,7 @@ where
         weigher: Option<Weigher<K, V>>,
         time_to_live: Option<Duration>,
         time_to_idle: Option<Duration>,
+        time_to_exist: Option<Duration>,
         eviction_handler: Box<dyn EvictionHandler<K, V>>,
     ) -> Self {
         let (r_snd, r_rcv) = crossbeam_channel::bounded(READ_LOG_SIZE);
@@ -109,6 +110,7 @@ where
             w_rcv,
             time_to_live,
             time_to_idle,
+            time_to_exist,
             eviction_handler,
         );
         Self {
@@ -138,11 +140,17 @@ where
             None => false,
             Some(entry) => {
                 let i = &self.inner;
-                let (ttl, tti, va) = (&i.time_to_live(), &i.time_to_idle(), &i.valid_after());
+                let (ttl, tti, tte, va) = (
+                    &i.time_to_live(),
+                    &i.time_to_idle(),
+                    &i.time_to_exist(),
+                    &i.valid_after(),
+                );
                 let now = i.current_time_from_expiration_clock();
                 let entry = &*entry;
 
-                !is_expired_entry_wo(ttl, va, entry, now)
+                !is_expired(tte, va, entry, now)
+                    && !is_expired_entry_wo(ttl, va, entry, now)
                     && !is_expired_entry_ao(tti, va, entry, now)
             }
         }
@@ -166,10 +174,16 @@ where
             }
             Some(entry) => {
                 let i = &self.inner;
-                let (ttl, tti, va) = (&i.time_to_live(), &i.time_to_idle(), &i.valid_after());
+                let (tte, ttl, tti, va) = (
+                    &i.time_to_exist(),
+                    &i.time_to_live(),
+                    &i.time_to_idle(),
+                    &i.valid_after(),
+                );
                 let arc_entry = &*entry;
 
-                if is_expired_entry_wo(ttl, va, arc_entry, now)
+                if is_expired(tte, va, arc_entry, now)
+                    || is_expired_entry_wo(ttl, va, arc_entry, now)
                     || is_expired_entry_ao(tti, va, arc_entry, now)
                 {
                     // Drop the entry to avoid to deadlock with record_read_op.
@@ -236,10 +250,17 @@ where
 impl<K, V, S> BaseCache<K, V, S> {
     pub(crate) fn is_expired_entry(&self, entry: &TrioArc<ValueEntry<K, V>>) -> bool {
         let i = &self.inner;
-        let (ttl, tti, va) = (&i.time_to_live(), &i.time_to_idle(), &i.valid_after());
+        let (tte, ttl, tti, va) = (
+            &i.time_to_exist(),
+            &i.time_to_live(),
+            &i.time_to_idle(),
+            &i.valid_after(),
+        );
         let now = i.current_time_from_expiration_clock();
 
-        is_expired_entry_wo(ttl, va, entry, now) || is_expired_entry_ao(tti, va, entry, now)
+        is_expired(tte, va, entry, now)
+            || is_expired_entry_wo(ttl, va, entry, now)
+            || is_expired_entry_ao(tti, va, entry, now)
     }
 }
 
@@ -490,6 +511,7 @@ pub(crate) struct Inner<K, V, S> {
     write_op_ch: Receiver<WriteOp<K, V>>,
     time_to_live: Option<Duration>,
     time_to_idle: Option<Duration>,
+    time_to_exist: Option<Duration>,
     valid_after: AtomicInstant,
     weigher: Option<Weigher<K, V>>,
     has_expiration_clock: AtomicBool,
@@ -516,6 +538,7 @@ where
         write_op_ch: Receiver<WriteOp<K, V>>,
         time_to_live: Option<Duration>,
         time_to_idle: Option<Duration>,
+        time_to_exist: Option<Duration>,
         eviction_handler: Box<dyn EvictionHandler<K, V>>,
     ) -> Self {
         let initial_capacity = initial_capacity
@@ -538,6 +561,7 @@ where
             write_op_ch,
             time_to_live,
             time_to_idle,
+            time_to_exist,
             valid_after: Default::default(),
             weigher,
             has_expiration_clock: AtomicBool::new(false),
@@ -611,7 +635,12 @@ where
 // functions/methods used by BaseCache
 impl<K, V, S> Inner<K, V, S> {
     fn policy(&self) -> Policy {
-        Policy::new(self.max_capacity, self.time_to_live, self.time_to_idle)
+        Policy::new(
+            self.max_capacity,
+            self.time_to_live,
+            self.time_to_idle,
+            self.time_to_exist,
+        )
     }
 
     #[inline]
@@ -622,6 +651,11 @@ impl<K, V, S> Inner<K, V, S> {
     #[inline]
     fn time_to_idle(&self) -> Option<Duration> {
         self.time_to_idle
+    }
+
+    #[inline]
+    fn time_to_exist(&self) -> Option<Duration> {
+        self.time_to_exist
     }
 
     #[inline]
@@ -636,12 +670,12 @@ impl<K, V, S> Inner<K, V, S> {
 
     #[inline]
     fn has_expiry(&self) -> bool {
-        self.time_to_live.is_some() || self.time_to_idle.is_some()
+        self.time_to_exist.is_some() || self.time_to_live.is_some() || self.time_to_idle.is_some()
     }
 
     #[inline]
     fn is_write_order_queue_enabled(&self) -> bool {
-        self.time_to_live.is_some()
+        self.time_to_exist.is_some() || self.time_to_live.is_some()
     }
 
     #[inline]
@@ -1117,13 +1151,14 @@ where
         now: Instant,
         counters: &mut EvictionCounters,
     ) {
+        let tte = &self.time_to_exist;
         let tti = &self.time_to_idle;
         let va = &self.valid_after();
         for _ in 0..batch_size {
             // Peek the front node of the deque and check if it is expired.
             let key = deq.peek_front().and_then(|node| {
                 // TODO: Skip the entry if it is dirty. See `evict_lru_entries` method as an example.
-                if is_expired_entry_ao(tti, va, node, now) {
+                if is_expired(tte, va, node, now) || is_expired_entry_ao(tti, va, node, now) {
                     Some(Arc::clone(node.element.key()))
                 } else {
                     None
@@ -1140,7 +1175,9 @@ where
             // expired. This check is needed because it is possible that the entry in
             // the map has been updated or deleted but its deque node we checked
             // above have not been updated yet.
-            let maybe_entry = self.remove_if(key, |_, v| is_expired_entry_ao(tti, va, v, now));
+            let maybe_entry = self.remove_if(key, |_, v| {
+                is_expired(tte, va, v, now) || is_expired_entry_ao(tti, va, v, now)
+            });
 
             if let Some((_k, entry)) = maybe_entry {
                 Self::handle_remove_with_deques(deq_name, deq, write_order_deq, entry, counters);
@@ -1187,11 +1224,12 @@ where
         counters: &mut EvictionCounters,
     ) {
         let ttl = &self.time_to_live;
+        let tte = &self.time_to_exist;
         let va = &self.valid_after();
         for _ in 0..batch_size {
             let key = deqs.write_order.peek_front().and_then(|node| {
                 // TODO: Skip the entry if it is dirty. See `evict_lru_entries` method as an example.
-                if is_expired_entry_wo(ttl, va, node, now) {
+                if is_expired(tte, va, node, now) || is_expired_entry_wo(ttl, va, node, now) {
                     Some(Arc::clone(node.element.key()))
                 } else {
                     None
@@ -1204,7 +1242,9 @@ where
 
             let key = key.as_ref().unwrap();
 
-            let maybe_entry = self.remove_if(key, |_, v| is_expired_entry_wo(ttl, va, v, now));
+            let maybe_entry = self.remove_if(key, |_, v| {
+                is_expired(tte, va, v, now) || is_expired_entry_wo(ttl, va, v, now)
+            });
 
             if let Some((_k, entry)) = maybe_entry {
                 Self::handle_remove(deqs, entry, counters);
@@ -1325,7 +1365,30 @@ fn is_expired_entry_ao(
         if let Some(tti) = time_to_idle {
             let checked_add = ts.checked_add(*tti);
             if checked_add.is_none() {
-                panic!("ttl overflow")
+                panic!("tti overflow")
+            }
+            return checked_add.unwrap() <= now;
+        }
+    }
+    false
+}
+
+fn is_expired(
+    time_to_exist: &Option<Duration>,
+    valid_after: &Option<Instant>,
+    entry: &impl AccessTime,
+    now: Instant,
+) -> bool {
+    if let Some(ts) = entry.created() {
+        if let Some(va) = valid_after {
+            if ts < *va {
+                return true;
+            }
+        }
+        if let Some(tte) = time_to_exist {
+            let checked_add = ts.checked_add(*tte);
+            if checked_add.is_none() {
+                panic!("tte overflow");
             }
             return checked_add.unwrap() <= now;
         }
@@ -1375,6 +1438,7 @@ mod tests {
                 Some(max_capacity),
                 None,
                 RandomState::default(),
+                None,
                 None,
                 None,
                 None,

@@ -23,6 +23,7 @@ pub(crate) trait AccessTime {
     fn set_last_accessed(&self, timestamp: Instant);
     fn last_modified(&self) -> Option<Instant>;
     fn set_last_modified(&self, timestamp: Instant);
+    fn created(&self) -> Option<Instant>;
 }
 
 pub(crate) struct KeyHash<K> {
@@ -122,6 +123,11 @@ impl<K> AccessTime for DeqNode<KeyDate<K>> {
     fn set_last_modified(&self, timestamp: Instant) {
         self.element.entry_info.set_last_modified(timestamp);
     }
+
+    #[inline]
+    fn created(&self) -> Option<Instant> {
+        self.element.entry_info.created()
+    }
 }
 
 impl<K> AccessTime for DeqNode<KeyHashDate<K>> {
@@ -143,6 +149,11 @@ impl<K> AccessTime for DeqNode<KeyHashDate<K>> {
     #[inline]
     fn set_last_modified(&self, _timestamp: Instant) {
         unreachable!();
+    }
+
+    #[inline]
+    fn created(&self) -> Option<Instant> {
+        self.element.entry_info.created()
     }
 }
 
@@ -282,6 +293,11 @@ impl<K, V> AccessTime for TrioArc<ValueEntry<K, V>> {
     #[inline]
     fn set_last_modified(&self, timestamp: Instant) {
         self.info.set_last_modified(timestamp);
+    }
+
+    #[inline]
+    fn created(&self) -> Option<Instant> {
+        self.info.created()
     }
 }
 

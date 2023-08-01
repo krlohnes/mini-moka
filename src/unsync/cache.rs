@@ -176,6 +176,7 @@ pub struct Cache<K, V, S = RandomState> {
     frequency_sketch_enabled: bool,
     time_to_live: Option<Duration>,
     time_to_idle: Option<Duration>,
+    time_to_exist: Option<Duration>,
     expiration_clock: Option<Clock>,
 }
 
@@ -209,7 +210,15 @@ where
     /// [builder-struct]: ./struct.CacheBuilder.html
     pub fn new(max_capacity: u64) -> Self {
         let build_hasher = RandomState::default();
-        Self::with_everything(Some(max_capacity), None, build_hasher, None, None, None)
+        Self::with_everything(
+            Some(max_capacity),
+            None,
+            build_hasher,
+            None,
+            None,
+            None,
+            None,
+        )
     }
 
     /// Returns a [`CacheBuilder`][builder-struct], which can builds a `Cache` with
@@ -230,7 +239,12 @@ impl<K, V, S> Cache<K, V, S> {
     /// At this time, cache policy cannot be modified after cache creation.
     /// A future version may support to modify it.
     pub fn policy(&self) -> Policy {
-        Policy::new(self.max_capacity, self.time_to_live, self.time_to_idle)
+        Policy::new(
+            self.max_capacity,
+            self.time_to_live,
+            self.time_to_idle,
+            self.time_to_exist,
+        )
     }
 
     /// Returns the number of entries in this cache.
@@ -277,6 +291,7 @@ where
         weigher: Option<Weigher<K, V>>,
         time_to_live: Option<Duration>,
         time_to_idle: Option<Duration>,
+        time_to_exist: Option<Duration>,
     ) -> Self {
         let cache = HashMap::with_capacity_and_hasher(
             initial_capacity.unwrap_or_default(),
@@ -295,6 +310,7 @@ where
             frequency_sketch_enabled: false,
             time_to_live,
             time_to_idle,
+            time_to_exist,
             expiration_clock: None,
         }
     }

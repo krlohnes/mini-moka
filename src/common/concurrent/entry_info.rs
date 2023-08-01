@@ -14,6 +14,7 @@ pub(crate) struct EntryInfo {
     is_dirty: AtomicBool,
     last_accessed: AtomicInstant,
     last_modified: AtomicInstant,
+    created: AtomicInstant,
     policy_weight: AtomicU32,
 }
 
@@ -25,6 +26,7 @@ impl EntryInfo {
             is_dirty: AtomicBool::new(true),
             last_accessed: AtomicInstant::new(timestamp),
             last_modified: AtomicInstant::new(timestamp),
+            created: AtomicInstant::new(timestamp),
             policy_weight: AtomicU32::new(policy_weight),
         }
     }
@@ -78,5 +80,10 @@ impl AccessTime for EntryInfo {
     #[inline]
     fn set_last_modified(&self, timestamp: Instant) {
         self.last_modified.set_instant(timestamp);
+    }
+
+    #[inline]
+    fn created(&self) -> Option<Instant> {
+        self.created.instant()
     }
 }
